@@ -1,47 +1,29 @@
+import warnings
+from warnings import warn
+
 import numpy as np
 
 from scipy.sparse import issparse
 
 from sklearn.ensemble.base import BaseEnsemble, _partition_estimators
-from sklearn.utils import check_array, check_random_state
+from sklearn.utils import check_array, check_random_state, compute_sample_weight
 from sklearn.utils.multiclass import check_classification_targets
+from sklearn.utils.validation import DataConversionWarning, NotFittedError
+from sklearn.externals import six
 
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.decomposition import PCA
-from sklearn.cross_validation import KFold
 
 from joblib import Parallel, delayed
 
+from .misc_functions import get_partition, get_bootstrapping
 
 __author__ = 'anton-goy'
 
 
 MAX_INT = np.iinfo(np.int32).max
 
-def _get_partition(n_features, max_features_in_subset, random_state):    
-    if n_features == max_features_in_subset:
-        yield np.arange(n_features)
-    else:
-        n_subsets = n_features // max_features_in_subset
 
-        if n_subsets == 1:
-            n_subsets += 1
-
-        cv_partitioner = KFold(n=n_features, 
-                               n_folds=n_subsets,
-                               shuffle=True, 
-                               random_state=random_state)
-        for _, test_index in cv_partitioner:
-            yield test_index
-        
-def _get_bootstrapping(n_samples, n_subsets, samples_fraction, random_state):
-    np.random.seed(random_state)
-
-    for _ in range(n_subsets):
-        yield np.unique(np.random.choice(a=np.arange(n_samples), 
-                                         size=int(samples_fraction * n_samples)))
-        
-        
 def _parallel_helper(obj, methodname, *args, **kwargs):
     """Private helper to workaround Python 2 pickle limitations"""
     return getattr(obj, methodname)(*args, **kwargs)
@@ -58,8 +40,7 @@ def _parallel_pca(rotation_matrix, partition_iterator, boostrapping_iterator, X,
         Xi_components = PCA().fit(Xi).components_.T
         
         rotation_matrix[column_inds[:, None], column_inds] = Xi_components
-        
-        
+
     return rotation_matrix
         
         
@@ -71,6 +52,7 @@ def _generate_sample_indices(random_state, n_samples):
 
     return sample_indices
 
+
 def _generate_unsampled_indices(random_state, n_samples):
     """Private function used to forest._set_oob_score fuction."""
     sample_indices = _generate_sample_indices(random_state, n_samples)
@@ -80,6 +62,7 @@ def _generate_unsampled_indices(random_state, n_samples):
     unsampled_indices = indices_range[unsampled_mask]
 
     return unsampled_indices
+
 
 def _parallel_build_trees(rotation_matrix, tree, forest, X, y, sample_weight, tree_idx, n_trees,
                           verbose=0, class_weight=None):
@@ -110,7 +93,6 @@ def _parallel_build_trees(rotation_matrix, tree, forest, X, y, sample_weight, tr
         tree.fit(X.dot(rotation_matrix), y, sample_weight=sample_weight, check_input=False)
 
     return tree
-
 
 
 class RotationForestClassifier(BaseEnsemble):
@@ -279,8 +261,7 @@ class RotationForestClassifier(BaseEnsemble):
         self.verbose = verbose
         self.warm_start = warm_start
         self.class_weight = class_weight
-        
-        
+
     def fit(self, X, y, sample_weight=None):
         """Build a forest of rotation trees from the training set (X, y).
         
@@ -375,14 +356,14 @@ class RotationForestClassifier(BaseEnsemble):
             for i in range(n_more_estimators):
                 tree = self._make_estimator(append=False)
                 tree.set_params(random_state=random_state.randint(MAX_INT))
-                partition_iterator = _get_partition(self.n_features_, 
-                                                    self.max_features_in_subset, 
-                                                    random_state.randint(MAX_INT))
+                partition_iterator = get_partition(self.n_features_,
+                                                   self.max_features_in_subset,
+                                                   random_state.randint(MAX_INT))
                 
-                bootstrapping_iterator = _get_bootstrapping(n_samples, 
-                                                            self.n_features_ // self.max_features_in_subset, 
-                                                            self.samples_fraction, 
-                                                            random_state.randint(MAX_INT))
+                bootstrapping_iterator = get_bootstrapping(n_samples,
+                                                           self.n_features_ // self.max_features_in_subset,
+                                                           self.samples_fraction,
+                                                           random_state.randint(MAX_INT))
                 trees.append(tree)
                 partitions.append(partition_iterator)
                 bootstrappings.append(bootstrapping_iterator)

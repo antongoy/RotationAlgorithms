@@ -6,37 +6,12 @@ from sklearn.ensemble.base import BaseEnsemble
 from sklearn.base import is_regressor
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.decomposition import PCA
-from sklearn.cross_validation import KFold
 from sklearn.utils import check_array, check_X_y, check_random_state
-from sklearn.utils.validation import has_fit_parameter, check_is_fitted
+from sklearn.utils.validation import check_is_fitted
 
-from joblib import Parallel, delayed
+from .misc_functions import get_partition, get_bootstrapping
 
 MAX_INT = np.iinfo(np.int32).max
-
-
-def _get_partition(n_features, max_features_in_subset, random_state):    
-    if n_features == max_features_in_subset:
-        yield np.arange(n_features)
-    else:
-        n_subsets = n_features // max_features_in_subset
-
-        if n_subsets == 1:
-            n_subsets += 1
-
-        cv_partitioner = KFold(n=n_features, 
-                               n_folds=n_subsets,
-                               shuffle=True, 
-                               random_state=random_state)
-        for _, test_index in cv_partitioner:
-            yield test_index
-        
-def _get_bootstrapping(n_samples, n_subsets, samples_fraction, random_state):
-    np.random.seed(random_state)
-
-    for _ in range(n_subsets):
-        yield np.unique(np.random.choice(a=np.arange(n_samples), 
-                                         size=int(samples_fraction * n_samples)))
 
 
 class RotationAdaBoostClassifier(BaseEnsemble):
@@ -167,8 +142,7 @@ class RotationAdaBoostClassifier(BaseEnsemble):
         self.algorithm = algorithm
         self.random_state = random_state
         self.verbose = verbose
-        
-        
+
     def fit(self, X, y, sample_weight=None):
         """
         Build a boosted classifier/regressor from the training set (X, y).
@@ -265,8 +239,7 @@ class RotationAdaBoostClassifier(BaseEnsemble):
                 sample_weight /= sample_weight_sum
 
         return self
-    
-    
+
     def _boost(self, iboost, X, y, sample_weight, random_state):
         """
         Implement a single boost.
@@ -311,8 +284,7 @@ class RotationAdaBoostClassifier(BaseEnsemble):
 
         else:  # elif self.algorithm == "SAMME":
             return self._boost_discrete(iboost, X, y, sample_weight, random_state)
-        
-        
+
     def _make_rotation_matrix(self, X, sample_weight, random_state):
         """
         Make rotation matrix for current boost.
@@ -338,16 +310,20 @@ class RotationAdaBoostClassifier(BaseEnsemble):
         n_samples, n_features = X.shape
         rotation_matrix = np.zeros((n_features, n_features), dtype=np.float32)
 
-        partition_iter = _get_partition(n_features, self.max_features_in_subset, random_state)
-        bootstrap_iter = _get_bootstrapping(n_samples, n_features // self.max_features_in_subset, self.samples_fraction, random_state)
+        partition_iter = get_partition(n_features,
+                                       self.max_features_in_subset,
+                                       random_state)
+        bootstrap_iter = get_bootstrapping(n_samples,
+                                           n_features // self.max_features_in_subset,
+                                           self.samples_fraction,
+                                           random_state)
 
         for column_inds, row_inds in zip(partition_iter, bootstrap_iter):
+            # Make Weighted PCA
             Xi = X[row_inds[:, None], column_inds] * np.sqrt(sample_weight[row_inds, None])
 
             # Principal components are row-vectors
-            pca_object = PCA().fit(Xi)
-            Xi_components = pca_object.components_.T
-            n_components = pca_object.n_components_
+            Xi_components = PCA().fit(Xi).components_.T
 
             rotation_matrix[column_inds[:, None], column_inds] = Xi_components
     
@@ -471,8 +447,7 @@ class RotationAdaBoostClassifier(BaseEnsemble):
                                      (estimator_weight < 0)))
 
         return sample_weight, estimator_weight, estimator_error
-    
-    
+
     def predict(self, X):
         """
         Predict classes for X.
